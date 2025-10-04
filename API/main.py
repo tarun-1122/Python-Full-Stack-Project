@@ -1,104 +1,63 @@
-# frontend --> api --> logic --> db --> response
-
-
 # api/main.py
-
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from logic import register_user, login_user, add_new_poll, vote
-from typing import Optional
+from src import logic
 
 app = FastAPI(title="Simple Poll API")
 
-# -----------------------------
-# Request Models
-class RegisterUser(BaseModel):
-    username: str
-    email: str
-    password: str
+# allow Streamlit local origin and others during dev
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8501", "http://127.0.0.1:8501", "*"],  # '*' is permissive for dev; lock down in prod
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-class LoginUser(BaseModel):
-    email: str
-    password: str
+class QuestionRequest(BaseModel):
+    question_text: str
+    created_by: str
+    choices: list
 
-class CreatePoll(BaseModel):
-    question: str
-    option1: str
-    option2: str
-    option3: Optional[str] = None
-    option4: Optional[str] = None
-    created_by: int
+class ResponseRequest(BaseModel):
+    question_id: str
+    choice_id: str
+    user_id: str
 
-class CastVote(BaseModel):
-    poll_id: int
-    user_id: int
-    chosen_option: int
+@app.get("/questions")
+def list_questions():
+    res = logic.fetch_all_questions()
+    if isinstance(res, dict) and res.get("error"):
+        raise HTTPException(status_code=500, detail=res["error"])
+    return res
 
-# -----------------------------
-# Endpoints
+@app.get("/questions/{question_id}")
+def get_question(question_id: str):
+    res = logic.fetch_question_by_id(question_id)
+    if res is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+    if isinstance(res, dict) and res.get("error"):
+        raise HTTPException(status_code=500, detail=res["error"])
+    return res
 
-@app.post("/register")
-def api_register(user: RegisterUser):
-    result = register_user(user.username, user.email, user.password)
-    return {"message": result}
+@app.post("/create_question")
+def create_question(req: QuestionRequest):
+    res = logic.create_question_logic(req.question_text, req.created_by, req.choices)
+    if isinstance(res, dict) and res.get("error"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
 
-@app.post("/login")
+@app.post("/respond")
+def respond(req: ResponseRequest):
+    res = logic.response_logic(req.question_id, req.choice_id, req.user_id)
+    if isinstance(res, dict) and res.get("error"):
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
 
-def api_login(user: LoginUser):
-    result = login_user(user.email, user.password)
-    if "successful" in result:
-        return {"message": result}
-    else:
-        raise HTTPException(status_code=400, detail=result)
-
-@app.post("/create_poll")
-def api_create_poll(poll: CreatePoll):
-    result = add_new_poll(
-        poll.question, poll.option1, poll.option2, poll.option3, poll.option4, poll.created_by
-    )
-    return {"message": result}
-
-@app.post("/vote")
-def api_cast_vote(vote_data: CastVote):
-    result = vote(vote_data.poll_id, vote_data.user_id, vote_data.chosen_option)
-    if "successfully" in result:
-        return {"message": result}
-    else:
-        raise HTTPException(status_code=400, detail=result)
-
-# -----------------------------
-# Optional: Fetch all polls
-@app.get("/polls")
-def get_polls():
-    from supabase import create_client
-    import os
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-    resp = supabase.table("Polls").select("*").execute()
-    return {"polls": resp.data}
-
-# -----------------------------
-# Optional: Fetch poll results
-@app.get("/poll_results/{poll_id}")
-def get_poll_results(poll_id: int):
-    from supabase import create_client
-    import os
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-    votes = supabase.table("Votes").select("*").eq("poll_id", poll_id).execute()
-    results = {}
-    for vote_record in votes.data:
-        opt = vote_record["chosen_option"]
-        results[opt] = results.get(opt, 0) + 1
-
-    return {"poll_id": poll_id, "results": results}
+@app.get("/results/{question_id}")
+def results(question_id: str):
+    res = logic.results_logic(question_id)
+    if isinstance(res, dict) and res.get("error"):
+        raise HTTPException(status_code=500, detail=res["error"])
+    return res
